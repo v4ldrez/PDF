@@ -1,0 +1,59 @@
+import pdfplumber
+import pandas as pd
+from pathlib import Path
+
+def extrair_tabelas_pdf(
+    pdf_path: str,
+    pasta_saida: str = r"C:\Users\guilherme.cristo\Downloads\tabelas_pdf",
+    arquivo_excel: str | None = r"C:\Users\guilherme.cristo\Downloads\tabelas_pdf\tabelas_pdf.xlsx",
+    min_linhas: int = 2,
+    min_colunas: int = 2,
+):
+    pdf_path = Path(pdf_path)
+    pasta_saida = Path(pasta_saida)
+    pasta_saida.mkdir(parents=True, exist_ok=True)
+
+    todas_tabelas = []
+
+    with pdfplumber.open(pdf_path) as pdf:
+        for i, page in enumerate(pdf.pages, start=1):
+
+            table_settings = {
+                "vertical_strategy": "lines",
+                "horizontal_strategy": "lines",
+                "intersection_tolerance": 5,
+                "snap_tolerance": 3,
+                "join_tolerance": 3,
+                "edge_min_length": 20,
+                "min_words_vertical": 3,
+                "min_words_horizontal": 3,
+            }
+
+            tables = page.extract_tables(table_settings=table_settings)
+
+            for j, table in enumerate(tables, start=1):
+
+                df = pd.DataFrame(table)
+
+                if df.shape[0] < min_linhas or df.shape[1] < min_colunas:
+                    continue
+
+                sheet_name = f"p{i}_t{j}"
+                todas_tabelas.append((df, sheet_name))
+
+                csv_path = pasta_saida / f"{pdf_path.stem}_{sheet_name}.csv"
+                df.to_csv(csv_path, index=False)
+
+                print(f"Extraída tabela página {i}, tabela {j} -> {csv_path}")
+
+    if arquivo_excel and todas_tabelas:
+        xlsx_path = Path(arquivo_excel)
+        with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
+            for df, sheet_name in todas_tabelas:
+                df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+
+        print(f"Arquivo Excel gerado em: {xlsx_path}")
+
+
+if __name__ == "__main__":
+    extrair_tabelas_pdf(r"C:\Users\guilherme.cristo\Downloads\NVIDIA.pdf")
