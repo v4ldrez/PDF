@@ -1,0 +1,207 @@
+# pip install pandas openpyxl
+
+import pandas as pd
+from pathlib import Path
+
+# =======================
+# CONFIGURAÇÃO DE CAMINHOS
+# =======================
+# Arquivo com as tabelas extraídas do PDF (aquele gerado antes)
+INPUT_EXCEL = r"C:\Users\guilherme.cristo\Downloads\tabelas_pdf\tabelas_pdf.xlsx"
+
+# Arquivo de saída com o resumo em 3 abas
+OUTPUT_EXCEL = r"C:\Users\guilherme.cristo\Downloads\tabelas_pdf\resumo_nvidia.xlsx"
+
+
+# =======================
+# FUNÇÕES AUXILIARES
+# =======================
+
+def classificar_tabela(df: pd.DataFrame) -> str | None:
+    """
+    Classifica a tabela como 'receita', 'balanco', 'fluxo' ou None,
+    com base em palavras-chave na primeira coluna e primeiras linhas.
+    Ajuste as keywords se quiser ficar mais fino.
+    """
+    # Garante que temos algo para olhar
+    if df.empty:
+        return None
+
+    # Pegamos a primeira coluna (labels / rubricas normalmente ficam nela)
+    primeira_col = df.iloc[:, 0].astype(str).str.lower().fillna("")
+    texto = " ".join(primeira_col.tolist())
+
+    # Palavras-chave (inglês porque o 10-Q da NVIDIA é em inglês)
+    kw_receita = [
+        "statement of income",
+        "statements of income",
+        "operations",
+        "net sales",
+        "total revenue",
+        "revenue",
+        "net income",
+        "earnings"
+    ]
+    kw_balanco = [
+        "balance sheet",
+        "balance sheets",
+        "total assets",
+        "total liabilities",
+        "total shareholders",
+        "total stockholders",
+        "equity"
+    ]
+    kw_fluxo = [
+        "cash flows",
+        "statement of cash flows",
+        "net cash provided by operating activities",
+        "operating activities",
+        "investing activities",
+        "financing activities"
+    ]
+
+    if any(k in texto for k in kw_fluxo):
+        return "fluxo"
+    if any(k in texto for k in kw_balanco):
+        return "balanco"
+    if any(k in texto for k in kw_receita):
+        return "receita"
+    return None
+
+
+def extrair_linhas_chave(df: pd.DataFrame, keywords: list[str]) -> list[list]:
+    """
+    Procura linhas na primeira coluna contendo qualquer palavra-chave
+    e retorna essas linhas como listas de valores.
+    """
+    linhas = []
+    if df.empty:
+        return linhas
+
+    primeira_col = df.iloc[:, 0].astype(str).str.lower().fillna("")
+    for idx, val in primeira_col.items():
+        if any(k in val for k in keywords):
+            linha = df.loc[idx].tolist()
+            linhas.append(linha)
+    return linhas
+
+
+# =======================
+# PIPELINE PRINCIPAL
+# =======================
+
+def montar_resumo_3_abas(input_excel: str, output_excel: str):
+    input_excel = Path(input_excel)
+    output_excel = Path(output_excel)
+
+    # Lê todas as abas do arquivo original em um dict: {sheet_name: df}
+    sheets_dict: dict[str, pd.DataFrame] = pd.read_excel(
+        input_excel,
+        sheet_name=None,
+        header=None  # mantemos bruto como veio do PDF
+    )
+
+    receitas = []   # lista de (nome_aba, df)
+    balancos = []   # lista de (nome_aba, df)
+    fluxos = []     # lista de (nome_aba, df)
+
+    # Classifica cada aba
+    for sheet_name, df in sheets_dict.items():
+        tipo = classificar_tabela(df)
+        if tipo == "receita":
+            receitas.append((sheet_name, df))
+        elif tipo == "balanco":
+            balancos.append((sheet_name, df))
+        elif tipo == "fluxo":
+            fluxos.append((sheet_name, df))
+
+    # Cria o Excel de saída
+    with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
+        # -------------------
+        # ABA 1: RECEITAS
+        # -------------------
+        if receitas:
+            # Vamos concatenar as tabelas de receita, separando por linahs em branco e título
+            all_rows = []
+            for sheet_name, df in receitas:
+                # linha de título com o nome da aba original
+                all_rows.append([f"Sheet: {sheet_name}"])
+                # adiciona conteúdo
+                all_rows.extend(df.values.tolist())
+                # linha em branco para separar
+                all_rows.append([])
+
+            df_receitas = pd.DataFrame(all_rows)
+            df_receitas.to_excel(writer, sheet_name="Receitas", index=False, header=False)
+
+        # -------------------
+        # ABA 2: BALANÇO
+        # -------------------
+        if balancos:
+            all_rows = []
+            for sheet_name, df in balancos:
+                all_rows.append([f"Sheet: {sheet_name}"])
+                all_rows.extend(df.values.tolist())
+                all_rows.append([])
+
+            df_balanco = pd.DataFrame(all_rows)
+            df_balanco.to_excel(writer, sheet_name="Balanco", index=False, header=False)
+
+        # -------------------
+        # ABA 3: FLUXO DE CAIXA + RESUMO
+        # -------------------
+        all_rows_fluxo = []
+
+        # 3.1 Resumo com linhas chave de Receita e Balanço
+        all_rows_fluxo.append(["Resumo - Linhas chave de Receita e Balanço"])
+        all_rows_fluxo.append([])
+
+        # Palavras-chave para resumo de receita e balanço
+        kw_resumo_receita = [
+            "total revenue", "net revenue", "net sales", "net income"
+        ]
+        kw_resumo_balanco = [
+            "total assets", "total liabilities", "total shareholders", "total stockholders", "total equity"
+        ]
+
+        # Linhas chave de RECEITA
+        for sheet_name, df in receitas:
+            linhas = extrair_linhas_chave(df, kw_resumo_receita)
+            if not linhas:
+                continue
+            all_rows_fluxo.append([f"Resumo Receita - {sheet_name}"])
+            all_rows_fluxo.extend(linhas)
+            all_rows_fluxo.append([])
+
+        # Linhas chave de BALANÇO
+        for sheet_name, df in balancos:
+            linhas = extrair_linhas_chave(df, kw_resumo_balanco)
+            if not linhas:
+                continue
+            all_rows_fluxo.append([f"Resumo Balanco - {sheet_name}"])
+            all_rows_fluxo.extend(linhas)
+            all_rows_fluxo.append([])
+
+        # Linha separadora
+        all_rows_fluxo.append([])
+        all_rows_fluxo.append(["================= Tabelas completas de Fluxo de Caixa ================="])
+        all_rows_fluxo.append([])
+
+        # 3.2 Tabelas completas de fluxo de caixa
+        for sheet_name, df in fluxos:
+            all_rows_fluxo.append([f"Sheet: {sheet_name}"])
+            all_rows_fluxo.extend(df.values.tolist())
+            all_rows_fluxo.append([])
+
+        # Se não tiver identificado fluxos, ainda assim escreve o resumo
+        df_fluxo = pd.DataFrame(all_rows_fluxo)
+        df_fluxo.to_excel(writer, sheet_name="FluxoCaixa", index=False, header=False)
+
+    print(f"Resumo criado em: {output_excel}")
+    print(f"Aba 'Receitas' -> {len(receitas)} tabelas")
+    print(f"Aba 'Balanco'  -> {len(balancos)} tabelas")
+    print(f"Aba 'FluxoCaixa' com resumo + {len(fluxos)} tabelas de fluxo")
+
+
+if __name__ == "__main__":
+    montar_resumo_3_abas(INPUT_EXCEL, OUTPUT_EXCEL)
